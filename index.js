@@ -18,31 +18,51 @@ const chatSessions = new Map();
 
 // Initialize Gemini model
 const model = genAI.getGenerativeModel({ 
-  model: "gemini-1.5-flash",
-  systemInstruction: "You are a knowledgeable and motivational fitness assistant. Provide helpful, encouraging responses about fitness, nutrition, workouts, or health. Keep your responses conversational, friendly, under 150 words, include relevant emojis, focus on practical and safe advice, and be motivational and positive. If the question isn't fitness-related, gently redirect to fitness topics while still being helpful."
+  model: "gemini-2.5-flash",
+  systemInstruction: `You are a friendly and knowledgeable fitness AI assistant. Your role is to help users with:
+
+- Workout routines and exercise techniques
+- Nutrition advice and meal planning
+- Fitness motivation and goal setting
+- Health and wellness tips
+- Exercise form and safety
+- use emojis not extensively but anywhere needed
+- If asked to create table create table
+
+Keep your responses:
+- Conversational and encouraging
+- Practical and actionable
+- Focused on fitness and health topics
+- Positive and motivational
+
+If someone asks about non-fitness topics, politely redirect them to fitness-related questions. Always provide helpful, safe, and evidence-based fitness advice.`
 });
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  console.log('[GET] /health endpoint hit');
   res.json({ status: 'OK', message: 'Gemini Fitness Assistant API is running!' });
 });
 
 // Start a new chat session
 app.post('/api/chat/start', async (req, res) => {
+  console.log('[POST] /api/chat/start endpoint hit');
   try {
     const sessionId = Date.now().toString();
+    console.log('Creating new chat session with sessionId:', sessionId);
     
     // Create a new chat session
     const chat = model.startChat({
       history: [],
       generationConfig: {
-        maxOutputTokens: 200,
+        maxOutputTokens: 8192,
         temperature: 0.7,
       },
     });
 
     // Store the chat session
     chatSessions.set(sessionId, chat);
+    console.log('Chat session stored. Total sessions:', chatSessions.size);
 
     // Send welcome message
     const welcomeMessage = "Hi! I'm your AI fitness assistant powered by Google Gemini. Ask me anything about workouts, nutrition, or fitness! 💪";
@@ -56,6 +76,7 @@ app.post('/api/chat/start', async (req, res) => {
         timestamp: new Date().toISOString()
       }
     });
+    console.log('Sent welcome message for session:', sessionId);
   } catch (error) {
     console.error('Error starting chat session:', error);
     res.status(500).json({ 
@@ -67,8 +88,10 @@ app.post('/api/chat/start', async (req, res) => {
 
 // Send message to chat
 app.post('/api/chat/message', async (req, res) => {
+  console.log('[POST] /api/chat/message endpoint hit');
   try {
-    const { sessionId, message } = req.body;
+    const { sessionId, message, stream = false } = req.body;
+    console.log('Incoming message:', message, 'for sessionId:', sessionId, 'stream:', stream);
 
     if (!sessionId || !message) {
       return res.status(400).json({ 
@@ -79,25 +102,79 @@ app.post('/api/chat/message', async (req, res) => {
     // Get the chat session
     const chat = chatSessions.get(sessionId);
     if (!chat) {
+      console.warn('Chat session not found for sessionId:', sessionId);
       return res.status(404).json({ 
         error: 'Chat session not found. Please start a new session.' 
       });
     }
 
-    // Send message to Gemini
-    const result = await chat.sendMessage(message);
-    const response = await result.response;
-    const botReply = response.text();
+    // Handle streaming response
+    if (stream) {
+      console.log('Starting streaming response for session:', sessionId);
+      
+      // Set headers for Server-Sent Events
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Cache-Control'
+      });
 
-    // Return the bot's response
-    res.json({
-      message: {
-        id: Date.now(),
-        text: botReply,
-        sender: 'bot',
-        timestamp: new Date().toISOString()
+      try {
+        // Send message to Gemini with streaming
+        const result = await chat.sendMessageStream(message);
+        let fullResponse = '';
+        
+        for await (const chunk of result.stream) {
+          const chunkText = chunk.text();
+          fullResponse += chunkText;
+          
+          // Send chunk to frontend
+          res.write(`data: ${JSON.stringify({
+            type: 'chunk',
+            text: chunkText,
+            sessionId: sessionId
+          })}\n\n`);
+        }
+
+        // Send completion signal
+        res.write(`data: ${JSON.stringify({
+          type: 'complete',
+          fullText: fullResponse,
+          sessionId: sessionId
+        })}\n\n`);
+        
+        console.log('Streaming completed for session:', sessionId);
+        res.end();
+        
+      } catch (streamError) {
+        console.error('Streaming error:', streamError);
+        res.write(`data: ${JSON.stringify({
+          type: 'error',
+          error: 'Streaming failed',
+          sessionId: sessionId
+        })}\n\n`);
+        res.end();
       }
-    });
+      
+    } else {
+      // Non-streaming response (fallback)
+      const result = await chat.sendMessage(message);
+      const response = await result.response;
+      const botReply = response.text();
+      console.log('Gemini API reply:', botReply);
+
+      res.json({
+        message: {
+          id: Date.now(),
+          text: botReply,
+          sender: 'bot',
+          timestamp: new Date().toISOString()
+        }
+      });
+      console.log('Sent bot reply for session:', sessionId);
+    }
 
   } catch (error) {
     console.error('Error sending message:', error);
@@ -130,16 +207,19 @@ app.post('/api/chat/message', async (req, res) => {
       },
       isOffline: true
     });
+    console.log('Sent fallback response for session:', req.body.sessionId);
   }
 });
 
 // Get chat history
 app.get('/api/chat/history/:sessionId', async (req, res) => {
+  console.log('[GET] /api/chat/history/' + req.params.sessionId + ' endpoint hit');
   try {
     const { sessionId } = req.params;
     const chat = chatSessions.get(sessionId);
     
     if (!chat) {
+      console.warn('Chat session not found for history, sessionId:', sessionId);
       return res.status(404).json({ 
         error: 'Chat session not found' 
       });
@@ -147,6 +227,7 @@ app.get('/api/chat/history/:sessionId', async (req, res) => {
 
     // Get chat history
     const history = await chat.getHistory();
+    console.log('Returning chat history for session:', sessionId);
     
     res.json({
       history: history.map((item, index) => ({
@@ -168,13 +249,16 @@ app.get('/api/chat/history/:sessionId', async (req, res) => {
 
 // Clear chat session
 app.delete('/api/chat/:sessionId', (req, res) => {
+  console.log('[DELETE] /api/chat/' + req.params.sessionId + ' endpoint hit');
   try {
     const { sessionId } = req.params;
     
     if (chatSessions.has(sessionId)) {
       chatSessions.delete(sessionId);
+      console.log('Cleared chat session:', sessionId);
       res.json({ message: 'Chat session cleared successfully' });
     } else {
+      console.warn('Chat session not found for delete, sessionId:', sessionId);
       res.status(404).json({ error: 'Chat session not found' });
     }
   } catch (error) {
