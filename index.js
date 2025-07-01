@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Razorpay = require("razorpay");
 require('dotenv').config();
 
 const app = express();
@@ -26,7 +27,7 @@ const model = genAI.getGenerativeModel({
 - Fitness motivation and goal setting
 - Health and wellness tips
 - Exercise form and safety
-- use emojis not extensively but anywhere needed
+- use only one emoji per response, maximum
 - If asked to create table create table
 
 Keep your responses:
@@ -36,6 +37,12 @@ Keep your responses:
 - Positive and motivational
 
 If someone asks about non-fitness topics, politely redirect them to fitness-related questions. Always provide helpful, safe, and evidence-based fitness advice.`
+});
+
+// Razorpay instance (replace with your real keys)
+const razorpay = new Razorpay({
+  key_id: "YOUR_RAZORPAY_KEY_ID",
+  key_secret: "YOUR_RAZORPAY_SECRET_KEY",
 });
 
 // Health check endpoint
@@ -65,7 +72,7 @@ app.post('/api/chat/start', async (req, res) => {
     console.log('Chat session stored. Total sessions:', chatSessions.size);
 
     // Send welcome message
-    const welcomeMessage = "Hi! I'm your AI fitness assistant powered by Google Gemini. Ask me anything about workouts, nutrition, or fitness! 💪";
+    const welcomeMessage = "Hi! Ask me anything about workouts, fitness , heatly tips anyhow, how can i help you today ! ";
 
     res.json({
       sessionId,
@@ -283,6 +290,21 @@ setInterval(() => {
     }
   }
 }, 60 * 60 * 1000);
+
+// Razorpay order creation endpoint
+app.post("/api/createOrder", async (req, res) => {
+  const { amount } = req.body;
+  try {
+    const order = await razorpay.orders.create({
+      amount: amount * 100, // INR to paise
+      currency: "INR",
+      receipt: "receipt#1",
+    });
+    res.json({ orderId: order.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Error handling middleware
 app.use((error, req, res, next) => {
