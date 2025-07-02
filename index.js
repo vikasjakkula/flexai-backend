@@ -3,6 +3,8 @@ const cors = require('cors');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Razorpay = require("razorpay");
 require('dotenv').config();
+const http = require('http');
+const { Server } = require('socket.io');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -315,9 +317,38 @@ app.use((error, req, res, next) => {
   });
 });
 
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  }
+});
+
+// Socket.io event handlers
+io.on('connection', (socket) => {
+  console.log('A user connected:', socket.id);
+
+  // Forum Q&A: New question or answer
+  socket.on('forum:newQuestion', (data) => {
+    // Broadcast to all clients except sender
+    socket.broadcast.emit('forum:newQuestion', data);
+  });
+
+  // Workout: New comment
+  socket.on('workout:newComment', (data) => {
+    // Broadcast to all clients except sender
+    socket.broadcast.emit('workout:newComment', data);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+  });
+});
+
 // Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Gemini Fitness Assistant API running on port ${PORT}`);
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
   console.log(`📋 Health check: http://localhost:${PORT}/health`);
   
   if (!process.env.GEMINI_API_KEY) {
