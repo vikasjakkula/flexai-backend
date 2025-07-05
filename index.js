@@ -5,6 +5,7 @@ const Razorpay = require("razorpay");
 require('dotenv').config();
 const http = require('http');
 const { Server } = require('socket.io');
+const supabase = require('./supabaseClient');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -42,10 +43,15 @@ If someone asks about non-fitness topics, politely redirect them to fitness-rela
 });
 
 // Razorpay instance (replace with your real keys)
-const razorpay = new Razorpay({
-  key_id: "YOUR_RAZORPAY_KEY_ID",
-  key_secret: "YOUR_RAZORPAY_SECRET_KEY",
-});
+let razorpay = null;
+if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_SECRET_KEY) {
+  razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_SECRET_KEY,
+  });
+} else {
+  console.warn('⚠️  Warning: Razorpay keys not found. Payment features will be disabled.');
+}
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -296,6 +302,13 @@ setInterval(() => {
 // Razorpay order creation endpoint
 app.post("/api/createOrder", async (req, res) => {
   const { amount } = req.body;
+  
+  if (!razorpay) {
+    return res.status(503).json({ 
+      error: 'Payment service is not configured. Please set up Razorpay API keys.' 
+    });
+  }
+  
   try {
     const order = await razorpay.orders.create({
       amount: amount * 100, // INR to paise
@@ -303,6 +316,19 @@ app.post("/api/createOrder", async (req, res) => {
       receipt: "receipt#1",
     });
     res.json({ orderId: order.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Test Supabase connection endpoint
+app.get('/api/supabase-test', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('test') // Change 'test' to your actual table name
+      .select('*');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
